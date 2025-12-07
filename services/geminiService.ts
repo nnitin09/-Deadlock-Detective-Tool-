@@ -1,23 +1,13 @@
 import { GoogleGenAI } from "@google/genai";
 import { Node, Edge, DeadlockResult, NodeType } from '../types';
 
-const getClient = () => {
-  // Safe check for process.env availability
-  const apiKey = (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : null;
-  
-  if (!apiKey) {
-    throw new Error("API_KEY not found. Please ensure the environment variable is configured.");
-  }
-  return new GoogleGenAI({ apiKey });
-};
-
 export const analyzeWithGemini = async (
   nodes: Node[], 
   edges: Edge[], 
   result: DeadlockResult
 ): Promise<string> => {
   try {
-    const ai = getClient();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const processes = nodes.filter(n => n.type === NodeType.PROCESS).map(n => n.id);
     const resources = nodes.filter(n => n.type === NodeType.RESOURCE).map(n => n.id);
