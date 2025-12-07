@@ -28,16 +28,21 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const simulationRef = useRef<d3.Simulation<Node, undefined> | null>(null);
   
   // Store current dimensions in a ref so the 'tick' function always accesses live values
-  // without needing to recreate the closure/effect.
   const dimensionsRef = useRef({ width: 0, height: 0 });
 
   useEffect(() => {
     if (!wrapperRef.current || !svgRef.current) return;
 
+    // Safety check for D3 availability
+    if (!d3 || !d3.forceSimulation) {
+      console.error("D3 library not loaded correctly");
+      return;
+    }
+
     // Initialize simulation if not exists
     if (!simulationRef.current) {
       simulationRef.current = d3.forceSimulation<Node>()
-        .force('link', d3.forceLink<Node, any>().id(d => d.id).distance(100)) // Reduced distance for mobile
+        .force('link', d3.forceLink<Node, any>().id((d: any) => d.id).distance(100))
         .force('charge', d3.forceManyBody().strength(-300))
         .force('collide', d3.forceCollide().radius(35));
     }
@@ -46,35 +51,54 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     const svg = d3.select(svgRef.current);
 
     // --- RESIZE OBSERVER SETUP ---
-    // This ensures that when phone/tablet rotates or loads, we know the exact size
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (!entries || entries.length === 0) return;
-      
-      const { width, height } = entries[0].contentRect;
-      
-      // Update refs
-      dimensionsRef.current = { width, height };
-      
-      // Update center force dynamically
-      simulation.force('center', d3.forceCenter(width / 2, height / 2));
-      
-      // Re-heat simulation to gently pull nodes into the new view
-      simulation.alpha(0.5).restart();
-    });
+    let resizeObserver: ResizeObserver | null = null;
+    
+    // Check if ResizeObserver is supported
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver((entries) => {
+        if (!entries || entries.length === 0) return;
+        
+        const { width, height } = entries[0].contentRect;
+        
+        // Update refs
+        dimensionsRef.current = { width, height };
+        
+        // Update center force dynamically
+        simulation.force('center', d3.forceCenter(width / 2, height / 2));
+        
+        // Re-heat simulation to gently pull nodes into the new view
+        simulation.alpha(0.5).restart();
+      });
 
-    resizeObserver.observe(wrapperRef.current);
+      resizeObserver.observe(wrapperRef.current);
+    } else {
+      // Fallback for environments without ResizeObserver
+      const rect = wrapperRef.current.getBoundingClientRect();
+      const width = rect.width;
+      const height = rect.height;
+      dimensionsRef.current = { width, height };
+      simulation.force('center', d3.forceCenter(width / 2, height / 2));
+    }
 
     // --- DATA BINDING ---
     // Update nodes data
     simulation.nodes(nodes);
     
     // Create fresh link objects to avoid stale references
+    // Use defensive map to ensure we don't pass undefined if edges is weird
     const simulationLinks = edges.map(e => ({ ...e }));
     (simulation.force('link') as d3.ForceLink<Node, any>).links(simulationLinks);
 
     // Bind data to DOM
-    svg.selectAll<SVGGElement, Node>('.node-group').data(nodes);
-    svg.selectAll<SVGLineElement, any>('.link').data(simulationLinks);
+    // CRITICAL FIX: Do not use a key function (d => d.id) here. 
+    // React creates the DOM elements, so they initially lack D3 data (__data__).
+    // If we use a key function, D3 tries to read .id from undefined on the existing elements, causing a crash.
+    // By omitting the key function, D3 binds by index, which aligns correctly with React's render order.
+    svg.selectAll<SVGGElement, Node>('.node-group')
+       .data(nodes);
+       
+    svg.selectAll<SVGLineElement, any>('.link')
+       .data(simulationLinks);
 
     simulation.alpha(1).restart();
 
@@ -85,17 +109,13 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     simulation.on('tick', () => {
       const { width, height } = dimensionsRef.current;
       
-      // Use dimensionsRef to clamp within the CURRENT viewport size
-      // This fixes the issue where nodes would fly off-screen if the initial render size was wrong
-      // or if the device orientation changed.
-      
+      const maxX = width > 0 ? width : 2000;
+      const maxY = height > 0 ? height : 2000;
+
       svg.selectAll<SVGGElement, Node>('.node-group')
         .attr('transform', d => {
+          // STRICT SAFETY CHECK: If d is undefined or has no coordinates, hide it or skip update
           if (!d || typeof d.x !== 'number' || typeof d.y !== 'number') return null;
-          
-          // Safety fallback if width/height are 0 (e.g. initial invisible render)
-          const maxX = width > 0 ? width : 2000;
-          const maxY = height > 0 ? height : 2000;
 
           // Clamp
           d.x = Math.max(radius, Math.min(maxX - radius, d.x));
@@ -114,23 +134,20 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     // Cleanup
     return () => {
       simulation.stop();
-      resizeObserver.disconnect();
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
     };
   }, [nodes, edges]);
 
   // Drag behavior
   const handleDragStart = (e: React.MouseEvent, node: Node) => {
-    // Prevent scrolling on touch devices when dragging nodes
-    // e.preventDefault(); // Note: This might block scrolling entirely on some browsers, use carefully.
-    
     if(e.shiftKey) {
-      // Start connecting
       setConnectSource(node.id);
       const x = node.x || 0;
       const y = node.y || 0;
       setDragLine({ x1: x, y1: y, x2: x, y2: y });
     } else {
-       // Start moving
        if (!e.defaultPrevented) {
          simulationRef.current?.alphaTarget(0.3).restart();
          node.fx = node.x;
@@ -164,7 +181,6 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                setDragLine(prev => prev ? { ...prev, x2: cursorPt.x, y2: cursorPt.y } : null);
              }
           } else if(simulationRef.current) {
-            // Manual Drag Logic for smoother updates without React re-renders
             const draggedNode = nodes.find(n => n.fx !== null && n.fx !== undefined);
             if (draggedNode) {
                const svg = svgRef.current;
@@ -184,11 +200,9 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             setConnectSource(null);
             setDragLine(null);
           }
-          // Reset drag status
           nodes.forEach(n => { n.fx = null; n.fy = null; });
           simulationRef.current?.alphaTarget(0);
         }}
-        // Add touch event handlers for better mobile support if needed in future
       >
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="28" refY="3.5" orient="auto">
@@ -199,7 +213,6 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
           </marker>
         </defs>
 
-        {/* Links */}
         {edges.map(link => {
           const isCycle = highlightedCycle.includes(link.source) && highlightedCycle.includes(link.target);
           return (
@@ -213,7 +226,6 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
           );
         })}
 
-        {/* Drag Line */}
         {dragLine && (
           <line 
             x1={dragLine.x1} y1={dragLine.y1} 
@@ -222,14 +234,12 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
           />
         )}
 
-        {/* Nodes */}
         {nodes.map(node => (
           <g 
             key={node.id} 
             className="node-group cursor-grab active:cursor-grabbing"
             onMouseDown={(e) => handleDragStart(e, node)}
             onMouseUp={(e) => handleNodeMouseUp(e, node)}
-            // For better touch support, we could add onTouchStart here too
           >
             {node.type === NodeType.PROCESS ? (
               <circle 
@@ -251,7 +261,6 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
               {node.id.split('-')[0]}
             </text>
 
-            {/* Remove Button Hover Area */}
             <g 
               className="opacity-0 hover:opacity-100 transition-opacity cursor-pointer"
               transform="translate(15, -25)"

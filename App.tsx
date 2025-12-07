@@ -1,11 +1,12 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, Component, ErrorInfo, ReactNode } from 'react';
 import { 
   Play, 
   RefreshCw, 
   BrainCircuit, 
   LayoutDashboard,
   Server,
-  ArrowRight
+  ArrowRight,
+  AlertTriangle
 } from 'lucide-react';
 import { ControlPanel } from './components/ControlPanel';
 import { GraphCanvas } from './components/GraphCanvas';
@@ -14,8 +15,50 @@ import { detectDeadlock } from './services/deadlockService';
 import { analyzeWithGemini } from './services/geminiService';
 import { NodeType, Node, Edge, DeadlockResult } from './types';
 
+// --- Error Boundary Component ---
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("Uncaught error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 text-center">
+          <div className="bg-slate-900 border border-red-500/50 rounded-xl p-8 max-w-md w-full shadow-2xl">
+            <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+            <h2 className="text-xl font-bold text-white mb-2">Something went wrong</h2>
+            <p className="text-slate-400 text-sm mb-4">The application encountered an unexpected error.</p>
+            <div className="bg-slate-950 p-3 rounded text-left overflow-auto max-h-40 mb-6 border border-slate-800">
+              <code className="text-xs text-red-400 font-mono">
+                {this.state.error?.message || "Unknown error"}
+              </code>
+            </div>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children; 
+  }
+}
+
 // Factory functions to create fresh objects for state
-// Updated coordinates to be tighter for mobile views
 const createInitialNodes = (): Node[] => [
   { id: 'P1', type: NodeType.PROCESS, x: 100, y: 150 },
   { id: 'P2', type: NodeType.PROCESS, x: 250, y: 150 },
@@ -29,7 +72,7 @@ const createInitialEdges = (): Edge[] => [
   { id: 'e3', source: 'R2', target: 'P2' }, // R2 assigned to P2
 ];
 
-export default function App() {
+function DeadlockDetectiveApp() {
   // Use lazy initialization with factory functions to ensure fresh objects on mount and reset
   const [nodes, setNodes] = useState<Node[]>(createInitialNodes);
   const [edges, setEdges] = useState<Edge[]>(createInitialEdges);
@@ -37,8 +80,6 @@ export default function App() {
   const [aiAnalysis, setAiAnalysis] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   
-  // Note: activeTab state is kept for potential future tab switching UI, 
-  // though currently all panels are visible in the grid layout.
   const [activeTab, setActiveTab] = useState<'editor' | 'analysis'>('editor');
 
   const handleAddNode = (type: NodeType) => {
@@ -46,7 +87,6 @@ export default function App() {
     const prefix = type === NodeType.PROCESS ? 'P' : 'R';
     
     // Spawn nodes in a conservative area (50-200) so they exist on 320px screens
-    // D3's centering force will then arrange them nicely
     const newNode: Node = {
       id: `${prefix}${count}-${Date.now().toString().slice(-4)}`,
       type,
@@ -62,7 +102,6 @@ export default function App() {
   };
 
   const handleAddEdge = (sourceId: string, targetId: string) => {
-    // Validate edge: Process->Resource (Request) or Resource->Process (Allocation)
     const sourceNode = nodes.find(n => n.id === sourceId);
     const targetNode = nodes.find(n => n.id === targetId);
     
@@ -72,7 +111,6 @@ export default function App() {
       return;
     }
 
-    // Check if edge already exists
     if (edges.some(e => e.source === sourceId && e.target === targetId)) return;
 
     const newEdge: Edge = {
@@ -88,7 +126,6 @@ export default function App() {
   };
 
   const handleReset = () => {
-    // Always create fresh objects to avoid reference issues with D3
     setNodes(createInitialNodes());
     setEdges(createInitialEdges());
     setResult(null);
@@ -101,7 +138,6 @@ export default function App() {
     setResult(detectionResult);
     setActiveTab('analysis');
     
-    // Auto-trigger AI if deadlock found
     if (detectionResult.hasDeadlock) {
       setIsAnalyzing(true);
       try {
@@ -219,5 +255,13 @@ export default function App() {
 
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <DeadlockDetectiveApp />
+    </ErrorBoundary>
   );
 }

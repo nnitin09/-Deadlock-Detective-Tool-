@@ -2,9 +2,11 @@ import { GoogleGenAI } from "@google/genai";
 import { Node, Edge, DeadlockResult, NodeType } from '../types';
 
 const getClient = () => {
-  const apiKey = process.env.API_KEY;
+  // Safe check for process.env availability
+  const apiKey = (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : null;
+  
   if (!apiKey) {
-    throw new Error("API_KEY not found in environment variables");
+    throw new Error("API_KEY not found. Please ensure the environment variable is configured.");
   }
   return new GoogleGenAI({ apiKey });
 };
