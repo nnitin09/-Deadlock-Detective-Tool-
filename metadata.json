@@ -1,0 +1,5 @@
+{
+  "name": "Deadlock Detective",
+  "description": "An automated deadlock detection and resolution tool for Operating Systems visualization. It uses a Resource Allocation Graph (RAG) algorithm to detect cycles and Gemini AI to suggest resolution strategies.",
+  "requestFramePermissions": []
+}
